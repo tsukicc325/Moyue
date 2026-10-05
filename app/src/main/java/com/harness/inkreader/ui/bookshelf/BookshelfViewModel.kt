@@ -97,6 +97,11 @@ class BookshelfViewModel(private val repo: BookRepository) : ViewModel() {
         runImport { repo.importFromUri(uri, null, _importMode.value) { report(it) } }
     }
 
+    /** 「打开方式 / 分享」进来的 URI：只按复制模式导入，见 BookshelfScreen 里的说明。 */
+    fun importCopied(uri: Uri) {
+        runImport { repo.importFromUri(uri, null, StorageMode.COPY) { report(it) } }
+    }
+
     fun importFile(file: File) {
         runImport { repo.importFromFile(file, null, StorageMode.COPY) { report(it) } }
     }

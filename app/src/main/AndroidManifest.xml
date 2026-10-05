@@ -20,6 +20,26 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!--
+              用文件管理器「打开方式 → 墨阅」导入 txt。
+              这条路径给的是 content:// URI，不是文件路径，所以走 pendingImportUri，
+              并且强制按「复制到应用」导入 —— ACTION_VIEW 给的读权限只在本次任务有效，
+              引用模式下重启后就打不开原文件了。
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <!-- 明确只处理本地文件，不是网页深链（否则 lint 会报 AppLinkUrlError） -->
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
     </application>
 

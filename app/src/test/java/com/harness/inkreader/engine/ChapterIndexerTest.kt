@@ -300,14 +300,30 @@ class ChapterIndexerTest {
     }
 
     @Test
-    fun `short preamble is not promoted to its own chapter`() {
+    fun `even a short preamble becomes its own chapter so no byte is unreachable`() {
+        // 这条以前断言的是相反的（短前言不单独成章）。那个行为有个真实后果：
+        // 不足 512 字节的书头**永远读不到** —— 真机上那本小说第一章从第 18 字节开始，
+        // 前 18 字节就成了黑洞，被校验脚本抓到。现在只要有内容就给它一章。
         val text = "作者的话\n\n" + novel(6)
         val file = write("short-preamble.txt", text, gbk)
 
         val result = ChapterIndexer().index(file, gbk)
 
-        assertEquals(6, result.chapters.size)
-        assertEquals("第1章 第1节的风雪", result.chapters.first().title)
+        assertEquals(7, result.chapters.size)
+        assertEquals(ChapterIndexer.PREAMBLE_TITLE, result.chapters.first().title)
+        assertEquals("前言必须从第 0 字节开始，否则那部分内容读不到", 0L, result.chapters.first().startByte)
+        assertEquals("第1章 第1节的风雪", result.chapters[1].title)
+
+        // 全部章节必须覆盖整个文件：第 0 字节起、最后一章结束于文件末尾、中间不留缝
+        assertEquals(0L, result.chapters.first().startByte)
+        assertEquals(file.length(), result.chapters.last().endByte)
+        for (index in 0 until result.chapters.size - 1) {
+            assertEquals(
+                "第 $index 章与下一章之间断了",
+                result.chapters[index + 1].startByte,
+                result.chapters[index].endByte,
+            )
+        }
     }
 
     @Test

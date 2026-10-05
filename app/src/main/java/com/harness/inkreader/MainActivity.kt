@@ -46,8 +46,23 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleImportIntent(intent: Intent?) {
-        val path = intent?.getStringExtra(InkApp.EXTRA_IMPORT_PATH) ?: return
-        (application as InkApp).pendingImportPath.value = path
+        if (intent == null) return
+        // 1) adb / 脚本用的显式路径参数
+        intent.getStringExtra(InkApp.EXTRA_IMPORT_PATH)?.let { path ->
+            (application as InkApp).pendingImportPath.value = path
+            return
+        }
+        // 2) 文件管理器「打开方式」/「分享」送来的 content:// URI
+        val app = application as InkApp
+        when (intent.action) {
+            Intent.ACTION_VIEW -> intent.data?.let { app.pendingImportUri.value = it.toString() }
+            Intent.ACTION_SEND -> {
+                @Suppress("DEPRECATION")
+                val uri = intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)
+                uri?.let { app.pendingImportUri.value = it.toString() }
+            }
+            else -> Unit
+        }
     }
 
     private companion object {

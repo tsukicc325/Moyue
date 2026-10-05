@@ -1,13 +1,18 @@
 # MoYue / InkReader - on-device verification (one command, full evidence pack)
 #
-# RUN THIS WITH pwsh (PowerShell 7), NOT powershell.exe 5.1:
-#   pwsh -NoProfile -File C:\Harness\InkReader\tools\device-check.ps1
+# This file contains Chinese strings - they ARE required: they are the app's on-screen
+# node names used to locate buttons (content-desc: toc / search / add-bookmark / ...).
 #
-# Why: this file contains Chinese strings (they are the app's on-screen node names
-# used to locate buttons, e.g. content-desc "search" / "toc"). It is saved as UTF-8
-# WITHOUT a BOM, and Windows PowerShell 5.1 decodes BOM-less UTF-8 as GBK, which can
-# mis-decode those characters and break PARSING - not just display. PowerShell 7
-# defaults to UTF-8 and handles it correctly.
+# It is therefore saved as UTF-8 **WITH a BOM**, and that matters:
+#   On a Chinese-locale Windows the ANSI code page is 936 (GBK). Without the BOM,
+#   PowerShell decodes the file as GBK, the Chinese comments/strings get mangled and
+#   the file fails to PARSE ("unexpected token '}'") - not just display garbage.
+#   Verified: BOM-less => 1 parse error, with BOM => 0 errors (both pwsh 7 and 5.1).
+#   Keep the BOM if you edit this file.
+#
+# Usage (works in PowerShell 7 and Windows PowerShell 5.1):
+#   pwsh -NoProfile -File ...\device-check.ps1
+#   powershell -ExecutionPolicy Bypass -File ...\device-check.ps1
 #
 # Usage:
 #   pwsh -NoProfile -File ...\device-check.ps1
@@ -17,7 +22,9 @@
 # What it does:
 #   1. checks the device is authorized
 #   2. installs the APK
-#   3. generates + pushes test novels into the app's own external files dir
+#   3. generates test novels and copies them into the app's OWN internal dir
+#      (NOT /sdcard/Android/data/<pkg>: a dir created by adb is owned by shell with
+#       mode drwxrws---, so the app itself gets "exists=false" / permission denied)
 #   4. imports one via the inkreader.import_path intent (no file picker needed)
 #   5. opens it, turns pages, toggles bars, searches, bookmarks, long-press selects
 #   6. with -IncludeHuge: imports the 100MB novel too and measures how long it takes
@@ -33,7 +40,7 @@ param(
     [string]$Pkg = 'com.harness.inkreader',
     [string]$Act = 'com.harness.inkreader/.MainActivity',
     [string]$TestData = 'C:\Harness\InkReader\testdata',
-    [string]$Out = 'C:\Harness\InkReader\device-evidence',
+    [string]$Out = '',
     [string]$Python = 'C:\python\python.exe',
     [switch]$IncludeHuge,
     [switch]$SkipInstall
@@ -52,6 +59,24 @@ function Ok($m)   { Write-Host "[+] $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "[!] $m" -ForegroundColor Yellow }
 function Fail($m) { Write-Host "[x] $m" -ForegroundColor Red; $script:Failures += $m }
 
+# UI node names, built from code points so this file stays PURE ASCII.
+# Why: a BOM-less UTF-8 .ps1 containing Chinese is decoded as GBK on a Chinese-locale
+# Windows (ANSI code page 936); the text gets mangled and the file FAILS TO PARSE
+# ("unexpected token '}'" - measured: 1 error without BOM, 0 with). Keeping it ASCII
+# removes that trap for good, whichever shell or editor touches the file.
+function U([int[]]$codes) { -join ($codes | ForEach-Object { [char]$_ }) }
+$NodeToc       = U 0x76EE, 0x5F55                    # toc
+$NodeMark      = U 0x6DFB, 0x52A0, 0x4E66, 0x7B7E    # add bookmark
+$NodeSearch    = U 0x641C, 0x7D22                    # search
+$NodeUnderline = U 0x5212, 0x7EBF                    # underline
+$NodeMore      = U 0x66F4, 0x591A                    # more
+$NodeAutoTurn  = U 0x81EA, 0x52A8, 0x7FFB, 0x9875    # auto page turn
+$NodeProgress  = U 0x8FDB, 0x5EA6                    # progress
+
+# Default evidence dir: <repo root>\device-evidence (derived from script location).
+if (-not $Out) {
+    $Out = Join-Path (Split-Path -Parent $PSScriptRoot) 'device-evidence'
+}
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 $dbDir = Join-Path $Out 'db'
 New-Item -ItemType Directory -Force -Path $dbDir | Out-Null
@@ -160,8 +185,13 @@ if ($IncludeHuge) { $hugeMb = 100 }
 & $Python (Join-Path (Split-Path $PSScriptRoot -Parent) 'tools\make_test_novels.py') `
     --out $TestData --huge-mb $hugeMb 2>&1 | ForEach-Object { "    $_" }
 
-$remoteDir = "/sdcard/Android/data/$Pkg/files"
-Sh "mkdir -p $remoteDir" | Out-Null
+# Put the samples in the app's OWN internal dir, NOT /sdcard/Android/data/<pkg>/files:
+# a dir created by adb (the shell user) has mode drwxrws--- and owner shell, so the APP
+# itself cannot read it - the import then fails with exists=false (measured on a device).
+# Route: push to /data/local/tmp (shell-writable, world-readable), then copy it in with
+# the app's own UID via run-as.
+$remoteDir = "/data/data/$Pkg/files"
+Sh "run-as $Pkg mkdir -p files" | Out-Null
 
 $pushList = @('sample-gbk.txt')
 if ($IncludeHuge) { $pushList += 'sample-huge.txt' }
@@ -170,9 +200,13 @@ foreach ($name in $pushList) {
     if (-not (Test-Path $local)) { Warn "missing test file: $local"; continue }
     Info "pushing $name ($([math]::Round((Get-Item $local).Length/1MB,2)) MB)"
     $t0 = Get-Date
-    $r = & $Adb -s $serial push $local "$remoteDir/$name" 2>&1
+    $stage = "/data/local/tmp/$name"
+    $r = & $Adb -s $serial push $local $stage 2>&1
+    $copied = Sh "run-as $Pkg cp $stage files/$name" 2>&1
+    Sh "rm -f $stage" | Out-Null
     $secs = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
     if ("$r" -match '1 file pushed') { Ok "pushed in ${secs}s" } else { Fail "push failed: $r" }
+    if ("$copied" -match 'denied|No such|error') { Fail "copy into app dir failed: $copied" }
 }
 
 function Import-AndWait([string]$remotePath, [string]$titleFragment, [int]$timeoutSec) {
@@ -240,7 +274,7 @@ if ($bookVisible) {
     Shot '23-bars.png'
 
     Info 'opening the table of contents'
-    if (Tap-Node -text '' -desc '目录' 8) {
+    if (Tap-Node -text '' -desc $NodeToc 8) {
         Start-Sleep -Milliseconds 900
         Shot '24-toc.png'
         Sh "input keyevent KEYCODE_BACK" | Out-Null
@@ -250,22 +284,22 @@ if ($bookVisible) {
     if (Pull-Db) {
         Info 'progress after page turns'
         & $Python (Join-Path (Split-Path $PSScriptRoot -Parent) 'tools\dump_db.py') (Join-Path $dbDir 'inkreader.db') 2>&1 |
-            Select-String -Pattern 'progress|进度' | ForEach-Object { "    $_" }
+            Select-String -Pattern ("progress|" + $NodeProgress) | ForEach-Object { "    $_" }
     }
 
     Info 'adding a bookmark (star icon)'
-    if (Tap-Node -text '' -desc '添加书签' 8) {
+    if (Tap-Node -text '' -desc $NodeMark 8) {
         Start-Sleep -Milliseconds 900
         Shot '30-bookmark.png'
     } else { Warn 'bookmark button not found' }
 
     Info 'searching for the ASCII marker'
-    if (Tap-Node -text '' -desc '搜索' 8) {
+    if (Tap-Node -text '' -desc $NodeSearch 8) {
         Start-Sleep -Milliseconds 900
         Sh "input text MARKER-ALPHA" | Out-Null
         Start-Sleep -Milliseconds 500
         Shot '40-search-input.png'
-        if (-not (Tap-Node -text '搜索' -desc '' 6)) { Warn 'search button not found' }
+        if (-not (Tap-Node -text $NodeSearch -desc '' 6)) { Warn 'search button not found' }
         Start-Sleep -Seconds 6
         Shot '41-search-results.png'
         Sh "input keyevent KEYCODE_BACK" | Out-Null
@@ -273,18 +307,28 @@ if ($bookVisible) {
     } else { Warn 'search button not found' }
 
     Info 'long-press to select a sentence'
-    Sh "input swipe $([int]($w*0.45)) $([int]($h*0.4)) $([int]($w*0.45)) $([int]($h*0.4)) 900" | Out-Null
-    Start-Sleep -Milliseconds 900
-    Shot '50-selection.png'
-    if (Tap-Node -text '划线' -desc '' 6) {
-        Start-Sleep -Milliseconds 800
-        Shot '51-highlighted.png'
-    } else { Warn 'selection action bar not found (long press may not have registered)' }
+    # adb-simulated long press is occasionally missed by Compose (zero-distance swipe),
+    # so try twice before giving up.
+    $selected = $false
+    foreach ($attempt in 1..2) {
+        Sh "input swipe $([int]($w*0.45)) $([int]($h*0.4)) $([int]($w*0.45)) $([int]($h*0.4)) 1200" | Out-Null
+        Start-Sleep -Milliseconds 1200
+        Shot "50-selection-attempt$attempt.png"
+        if (Tap-Node -text $NodeUnderline -desc '' 6) {
+            $selected = $true
+            Start-Sleep -Milliseconds 800
+            Shot '51-highlighted.png'
+            break
+        }
+    }
+    if (-not $selected) {
+        Warn 'selection action bar not found (long press may not have registered)'
+    }
 
     Info 'toggling auto page turn'
-    if (Tap-Node -text '' -desc '更多' 8) {
+    if (Tap-Node -text '' -desc $NodeMore 8) {
         Start-Sleep -Milliseconds 700
-        if (Tap-Node -text '自动翻页' -desc '' 6) {
+        if (Tap-Node -text $NodeAutoTurn -desc '' 6) {
             Start-Sleep -Seconds 3
             Shot '60-auto-page-turn.png'
         } else { Warn 'auto page turn menu item not found' }
@@ -316,8 +360,10 @@ if (Pull-Db) {
 
 Info 'collecting logs'
 & $Adb -s $serial logcat -d -v time > (Join-Path $Out 'logcat.txt')
+# Only real crashes. This used to match 'AndroidRuntime', which also matched the harmless
+# "I/AndroidRuntime: Using default boot image" startup line (a false positive).
 $crash = & $Adb -s $serial logcat -d -v brief |
-    Select-String -Pattern 'FATAL EXCEPTION|AndroidRuntime|beginning of crash|ANR in '
+    Select-String -Pattern 'FATAL EXCEPTION|beginning of crash|ANR in '
 if ($crash) {
     Fail 'crash or ANR found in logcat'
     $crash | Select-Object -First 40 | ForEach-Object { "    $_" }

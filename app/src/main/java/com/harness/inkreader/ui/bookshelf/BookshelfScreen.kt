@@ -2,6 +2,7 @@ package com.harness.inkreader.ui.bookshelf
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.util.LruCache
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -112,6 +113,7 @@ fun BookshelfScreen(
     val batch by viewModel.batch.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val pendingImportPath by app.pendingImportPath.collectAsStateWithLifecycle()
+    val pendingImportUri by app.pendingImportUri.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     var searching by remember { mutableStateOf(false) }
@@ -146,6 +148,14 @@ fun BookshelfScreen(
         val path = pendingImportPath ?: return@LaunchedEffect
         app.pendingImportPath.value = null
         viewModel.importFile(File(path))
+    }
+
+    // 「打开方式 / 分享到墨阅」送来的是 content:// URI，只能按复制模式导入
+    // （ACTION_VIEW 给的读权限只在本次任务有效，引用模式重启后就打不开原文件）
+    LaunchedEffect(pendingImportUri) {
+        val uri = pendingImportUri ?: return@LaunchedEffect
+        app.pendingImportUri.value = null
+        viewModel.importCopied(Uri.parse(uri))
     }
 
     LaunchedEffect(message) {

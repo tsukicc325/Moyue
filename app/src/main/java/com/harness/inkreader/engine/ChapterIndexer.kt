@@ -268,9 +268,13 @@ class ChapterIndexer(
         val sorted = candidates.sortedBy { it.startByte }
         val result = ArrayList<IndexedChapter>(sorted.size + 1)
 
-        // 第一章之前的内容（封面文案、作者的话）单独成章，避免那部分文字无法阅读
+        // 第一章之前的任何内容（封面文案、作者的话、只有十几字节的书名）单独成章。
+        //
+        // 这里曾经有个 512 字节的门槛，结果不足 512 字节的书头**永远读不到** ——
+        // 真机上那本小说第一章从第 18 字节开始，前 18 字节就成了黑洞（校验脚本抓到了）。
+        // 只要有内容（firstStart > 0）就给它一章，代价只是目录里多一行「卷首」。
         val firstStart = sorted.firstOrNull()?.startByte ?: 0L
-        if (firstStart >= MIN_PREAMBLE_BYTES) {
+        if (firstStart > 0L) {
             result.add(IndexedChapter(0, PREAMBLE_TITLE, 0L, firstStart))
         }
 
@@ -329,7 +333,6 @@ class ChapterIndexer(
         private const val BYTE_LF = 0x0A
         private const val BYTE_CR = 0x0D
 
-        private const val MIN_PREAMBLE_BYTES = 512L
         private const val INITIAL_CANDIDATE_CAPACITY = 512
         private const val INITIAL_VIRTUAL_CAPACITY = 4_096
 

@@ -9,7 +9,7 @@
   - 100MB 巨无霸（验证索引速度与内存）
 
 用法：
-    python tools/make_test_novels.py --out C:\\Harness\\InkReader\\testdata
+    python tools/make_test_novels.py --out testdata
     python tools/make_test_novels.py --out ... --huge-mb 100
 """
 import argparse
