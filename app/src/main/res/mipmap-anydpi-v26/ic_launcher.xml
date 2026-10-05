@@ -1,0 +1,14 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Keep this in mipmap-anydpi-v26, NOT mipmap-anydpi.
+  <adaptive-icon> requires API 26 and AAPT2 insists on the version-qualified folder:
+  moving it to a plain "anydpi" folder fails the build with
+  "error: resource mipmap/ic_launcher not found".
+  Lint's ObsoleteSdkInt suggestion to merge the folder is a false positive for
+  adaptive icons (the Android Studio template also uses -v26); it is only a warning.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ink_icon_bg" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

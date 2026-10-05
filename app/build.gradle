@@ -1,0 +1,96 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+    id 'com.google.devtools.ksp'
+}
+
+android {
+    namespace 'com.harness.inkreader'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.harness.inkreader"
+        minSdk 26
+        targetSdk 35
+        versionCode 5
+        versionName "0.4.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    buildFeatures {
+        compose true
+    }
+
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            returnDefaultValues = true
+            all {
+                // Robolectric 自带的下载器从 Maven Central 拉 android-all 实测只有 25KB/s，
+                // 会一直卡住；这里改成离线模式，用镜像预下载好的 jar。
+                systemProperty 'robolectric.offline', 'true'
+                systemProperty 'robolectric.dependency.dir', 'C:/Harness/robolectric-deps'
+                // 100MB 基准测试用这个上限当作「内存有界」的硬约束
+                maxHeapSize = '512m'
+                testLogging {
+                    showStandardStreams = true
+                    events 'failed'
+                }
+            }
+        }
+    }
+
+    packaging {
+        resources {
+            excludes += ['/META-INF/{AL2.0,LGPL2.1}']
+        }
+    }
+}
+
+dependencies {
+    implementation platform('androidx.compose:compose-bom:2024.10.01')
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-graphics'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.activity:activity-compose:1.9.3'
+    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.8.7'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
+    implementation 'androidx.navigation:navigation-compose:2.8.3'
+    implementation 'androidx.core:core-ktx:1.13.1'
+    // API 26/27 上按 EXIF 把封面转正（28+ 由 ImageDecoder 负责）
+    implementation 'androidx.exifinterface:exifinterface:1.3.7'
+
+    // 本地阅读引擎相关
+    implementation 'androidx.documentfile:documentfile:1.0.1'
+    implementation 'androidx.datastore:datastore-preferences:1.1.1'
+    implementation 'androidx.room:room-runtime:2.6.1'
+    implementation 'androidx.room:room-ktx:2.6.1'
+    ksp 'androidx.room:room-compiler:2.6.1'
+    implementation 'com.googlecode.juniversalchardet:juniversalchardet:1.0.3'
+
+    debugImplementation 'androidx.compose.ui:ui-tooling'
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
+    testImplementation 'androidx.test:core:1.6.1'
+    testImplementation 'androidx.test.ext:junit:1.2.1'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1'
+}

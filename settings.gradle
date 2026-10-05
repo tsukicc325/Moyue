@@ -1,0 +1,22 @@
+pluginManagement {
+    repositories {
+        google()
+        // 本机实测 Maven Central 只有 25KB/s，阿里云镜像 38MB/s，放前面兜底
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        mavenCentral()
+    }
+}
+
+rootProject.name = "InkReader"
+include ':app'

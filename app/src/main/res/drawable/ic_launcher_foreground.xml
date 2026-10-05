@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 墨滴：居中于 66dp 安全区内 -->
+    <path
+        android:fillColor="#F5EFE3"
+        android:pathData="M54,25 C54,25 35,50 35,62 C35,72.5 43.5,81 54,81 C64.5,81 73,72.5 73,62 C73,50 54,25 54,25 Z" />
+    <!-- 书页横线 -->
+    <path
+        android:fillColor="#8FB3D9"
+        android:pathData="M42,88 L66,88 L66,91 L42,91 Z" />
+</vector>
