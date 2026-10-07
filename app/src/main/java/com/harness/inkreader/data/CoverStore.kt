@@ -52,27 +52,42 @@ object Covers {
     suspend fun importCover(context: Context, bookId: Long, uri: Uri): String? =
         withContext(Dispatchers.IO) {
             val decoded = decode(context, uri) ?: return@withContext null
-            val scaled = scaleDown(decoded)
-            val target = fileFor(context, bookId)
-            // 先写临时文件再改名：中途失败也不会在书架上留下半张图
-            val temp = File(target.parentFile, "${target.name}.tmp")
-            val written = runCatching {
-                FileOutputStream(temp).use { out ->
-                    scaled.compress(Bitmap.CompressFormat.JPEG, QUALITY, out)
-                }
-            }.getOrDefault(false)
-            if (scaled !== decoded) scaled.recycle()
-            decoded.recycle()
-            if (!written) {
-                temp.delete()
-                return@withContext null
-            }
-            if (!temp.renameTo(target)) {
-                temp.delete()
-                return@withContext null
-            }
-            target.absolutePath
+            writeCover(context, bookId, decoded)
         }
+
+    /**
+     * 从内存字节导入封面 —— EPUB 里抽出来的封面图就是字节，没有 URI。
+     * 不走 EXIF 转正：EPUB 里的封面图不是相机照片。
+     */
+    suspend fun importCoverBytes(context: Context, bookId: Long, bytes: ByteArray): String? =
+        withContext(Dispatchers.IO) {
+            val decoded = decodeBytes(bytes) ?: return@withContext null
+            writeCover(context, bookId, decoded)
+        }
+
+    /** 缩放后写入封面文件（先临时文件再改名，失败不留半张图），返回新路径。 */
+    private fun writeCover(context: Context, bookId: Long, decoded: Bitmap): String? {
+        val scaled = scaleDown(decoded)
+        val target = fileFor(context, bookId)
+        // 先写临时文件再改名：中途失败也不会在书架上留下半张图
+        val temp = File(target.parentFile, "${target.name}.tmp")
+        val written = runCatching {
+            FileOutputStream(temp).use { out ->
+                scaled.compress(Bitmap.CompressFormat.JPEG, QUALITY, out)
+            }
+        }.getOrDefault(false)
+        if (scaled !== decoded) scaled.recycle()
+        decoded.recycle()
+        if (!written) {
+            temp.delete()
+            return null
+        }
+        if (!temp.renameTo(target)) {
+            temp.delete()
+            return null
+        }
+        return target.absolutePath
+    }
 
     fun delete(path: String?) {
         if (path.isNullOrBlank()) return
@@ -100,6 +115,41 @@ object Covers {
             runCatching { decodeModern(context, uri) }.getOrNull()?.let { return it }
         }
         return runCatching { decodeLegacy(context, uri) }.getOrNull()
+    }
+
+    /** 字节版本的解码，同样保留 ImageDecoder → BitmapFactory 两条路。 */
+    private fun decodeBytes(bytes: ByteArray): Bitmap? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            runCatching { decodeModernBytes(bytes) }.getOrNull()?.let { return it }
+        }
+        return runCatching { decodeLegacyBytes(bytes) }.getOrNull()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun decodeModernBytes(bytes: ByteArray): Bitmap? {
+        val source = ImageDecoder.createSource(java.nio.ByteBuffer.wrap(bytes))
+        return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            val longest = maxOf(info.size.width, info.size.height)
+            if (longest > MAX_EDGE_PX) {
+                val ratio = MAX_EDGE_PX.toFloat() / longest
+                decoder.setTargetSize(
+                    (info.size.width * ratio).toInt().coerceAtLeast(1),
+                    (info.size.height * ratio).toInt().coerceAtLeast(1),
+                )
+            }
+        }
+    }
+
+    private fun decodeLegacyBytes(bytes: ByteArray): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        val longest = maxOf(bounds.outWidth, bounds.outHeight)
+        if (longest <= 0) return null
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = Integer.highestOneBit((longest / MAX_EDGE_PX).coerceAtLeast(1))
+        }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
     }
 
     /** API 28+：ImageDecoder 会按 EXIF 自动转正，也能直接给目标尺寸。 */

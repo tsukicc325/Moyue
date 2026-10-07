@@ -1,6 +1,7 @@
-# 墨阅 · 安卓本地 txt 小说阅读器
+# 墨阅 · 安卓本地小说阅读器
 
 把下载来的 txt 小说（**包括 100MB 级、GBK 乱码、整本没有换行**这些情况）变成排版精良、翻页跟文件大小无关的电子书。
+也支持 **EPUB**：导入时解析成规范化文本，之后走完全相同的阅读链路。
 
 - 包名：`com.harness.inkreader`
 - 设计规格与取舍记录：[docs/PLAN.md](docs/PLAN.md) ｜ 最低 Android 8.0（API 26）｜ 目标 API 35
@@ -19,11 +20,12 @@
 | M5 | 设置：排版全项 · 字体导入 · 主题/背景图/亮度 · 手势 · 翻页动画 | ✅ |
 | M6 | 全文搜索 · 书签 · 划线笔记 · 自动翻页 · 阅读统计 | ✅ |
 | M7 | 打磨 · 真机一键验证脚本 · 长程稳定性 · 交付 | ✅ 真机已验证 |
+| M8 | 自定义封面（相册选图 · 等比缩小 · EXIF 转正 · 数据库真迁移） | ✅ |
+| M9 | EPUB 支持（容器/OPF/目录/正文提取/封面抽取，TXT 链路零改动） | ✅ 真机已验证 |
 
-自动化验证：**175 个测试全绿**（JVM 单测 + Robolectric），长程稳定性测试通过。
-真机验证在 一台 vivo 手机（Android 16，1260×2800）上完成，用**用户自己的 2445 章小说**跑通，
-并抓出 4 个只有真机才暴露的缺陷（见文末 9~12 号）。
-**真机验证尚未执行** —— 需要一台手机通过 USB 连接，见下文「真机验证」。
+自动化验证：**201 个测试全绿**（JVM 单测 + Robolectric），lint 0 error。
+真机验证在 一台 vivo 手机（Android 16，1260×2800）上完成，用**用户自己的 2446 章小说**跑通，
+并抓出多个只有真机才暴露的缺陷（见文末 9~19 号）。
 
 ---
 
@@ -139,7 +141,7 @@ export ANDROID_HOME=/path/to/android-sdk      # Windows: $env:ANDROID_HOME='...'
 
 ./gradlew assembleDebug        # 调试包，可直接侧载
 ./gradlew assembleRelease      # 发布包（用 debug 签名，同样可安装；已过 lintVitalRelease）
-./gradlew testDebugUnitTest    # 189 个单元测试（含 Robolectric）
+./gradlew testDebugUnitTest    # 201 个单元测试（含 Robolectric）
 ./gradlew lint
 ```
 
@@ -159,7 +161,7 @@ export ANDROID_HOME=/path/to/android-sdk      # Windows: $env:ANDROID_HOME='...'
 ## 测试
 
 ```powershell
-# 全部 167 个测试
+# 全部 201 个测试
 & 'C:\Harness\tools\gradle\gradle-8.11.1\bin\gradle.bat' -p 'C:\Harness\InkReader' testDebugUnitTest
 
 # 只看 100MB 基准（首次会生成约 300MB 样本，之后复用缓存）

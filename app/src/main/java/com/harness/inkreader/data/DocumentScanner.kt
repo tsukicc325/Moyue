@@ -11,7 +11,8 @@ data class ImportCandidate(
 
 object DocumentScanner {
 
-    private val TEXT_EXTENSIONS = setOf("txt", "text")
+    /** 能被导入的文件类型：纯文本，以及解析后同样变成纯文本的 EPUB。 */
+    private val TEXT_EXTENSIONS = setOf("txt", "text", "epub")
 
     fun isTextFile(name: String): Boolean {
         val extension = name.substringAfterLast('.', "").lowercase()

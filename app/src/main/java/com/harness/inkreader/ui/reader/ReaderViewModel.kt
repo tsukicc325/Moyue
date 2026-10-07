@@ -55,10 +55,25 @@ data class SearchUiState(
 )
 
 /**
- * 上下滚动轨道最多保留几块。每块通常是一整章，保留 3 块意味着用户往回翻两三章都还在，
- * 同时内存里始终只有 3 份排版。
+ * 上下滚动轨道至少保留几块：**活跃块 + 前后各一块**。
+ *
+ * 「后面那一块」是预取的下一个目标，必须留在窗口里 —— 否则每次预取刚拿到的内容
+ * 会被下一次收缩立刻丢掉，内容永远长不起来。
  */
-private const val SCROLL_TRACK_MAX = 3
+private const val SCROLL_TRACK_MIN = 3
+
+/**
+ * 轨道想留够几屏内容。
+ *
+ * 光按块数限制会出死锁：章节很短时（一章只有一句话），3 块加起来还填不满一屏，
+ * 界面就完全滚不动；而滚不动意味着活跃块一直停在轨道头部，新预取的块又被当成多余的
+ * 丢掉 —— 真机上表现为「卡在第一章划不了」。改成按内容高度留够两屏，
+ * 短章节时自然多留几块，界面就有东西可滚、活跃块才会往前移动。
+ */
+private const val SCROLL_TRACK_SCREENS = 2
+
+/** 轨道块数硬上限：再矮的章节也不会无限堆，内存始终有界。 */
+private const val SCROLL_TRACK_HARD_MAX = 12
 
 /**
  * 上下滚动轨道上的一块内容。
@@ -542,28 +557,44 @@ class ReaderViewModel(
     }
 
     /**
-     * 轨道超出窗口上限时收缩，但**绝不丢掉用户正在读的那一块**。
+     * 轨道收缩：按**内容高度**留够，而不是只按块数。
      *
-     * 丢正在读的块会让列表为了保持可见项而跳走 —— 真机上就是「读着读着突然跳页」。
-     * 所以按「活跃块在哪一半」来决定从哪一头丢。
+     * 两条必须同时满足的约束：
+     *  1. **绝不丢掉用户正在读的那一块**（丢了列表会为了保持可见项而跳走，
+     *     真机表现是「读着读着突然跳页」），活跃块后面的那一块也不能丢 —— 它是预取目标。
+     *  2. **内容至少要够两屏**，否则界面滚不动，而滚不动会让活跃块停住、
+     *     新预取的块又被丢掉，形成死锁（真机表现是「卡在第一章划不了」）。
+     *
+     * 所以先保住「活跃块 ± 1」，再朝**前**（用户接下来要读的方向，也是预取加入内容的那一头）
+     * 扩到够两屏为止，并用 [SCROLL_TRACK_HARD_MAX] 兜住内存。
      */
     private fun trimScrollTrack(
         grown: List<ScrollChunk>,
         activeChapter: Int,
         activeBlock: Int,
     ): List<ScrollChunk> {
-        if (grown.size <= SCROLL_TRACK_MAX) return grown
         val activeIndex = grown.indexOfFirst {
             it.chapterIdx == activeChapter && it.blockIndex == activeBlock
         }
-        val overflow = grown.size - SCROLL_TRACK_MAX
-        // 活跃块在前半 → 从尾部丢；否则从头部丢
-        val dropFromHead = activeIndex < 0 || activeIndex >= overflow
-        return if (dropFromHead) {
-            grown.subList(overflow, grown.size).toList()
-        } else {
-            grown.subList(0, grown.size - overflow)
+        if (activeIndex < 0) {
+            // 找不到活跃块（理论上不该发生）：保守地只留最后几块，至少不丢新的
+            return grown.takeLast(SCROLL_TRACK_MIN)
         }
+
+        var from = maxOf(0, activeIndex - 1)
+        var to = minOf(grown.lastIndex, activeIndex + 1)
+        var covered = 0
+        for (index in from..to) covered += grown[index].heightPx
+
+        val budget = (viewport?.heightPx ?: 0) * SCROLL_TRACK_SCREENS
+        while (covered < budget &&
+            to < grown.lastIndex &&
+            (to - from + 1) < SCROLL_TRACK_HARD_MAX
+        ) {
+            to++
+            covered += grown[to].heightPx
+        }
+        return grown.subList(from, to + 1).toList()
     }
 
     private suspend fun buildScrollChunkAfter(current: ScrollChunk): ScrollChunk? {        val currentBlocks = blocksFor(current.chapterIdx)

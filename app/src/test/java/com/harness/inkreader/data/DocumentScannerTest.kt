@@ -63,19 +63,20 @@ class DocumentScannerTest {
     }
 
     @Test
-    fun `only txt files are collected, recursively, case insensitively`() {
+    fun `text and epub files are collected, recursively, case insensitively`() {
         val root = temp.newFolder("library")
         writeNovel(File(root, "a.txt"))
         writeNovel(File(root, "b.TXT"))
         writeNovel(File(root, "sub/c.txt"))
         writeNovel(File(root, "sub/deeper/d.text"))
+        // EPUB 也算：导入时会被解析成规范化文本，对阅读链路来说同样是「文本」
         File(root, "d.epub").writeText("not a novel")
         File(root, "e.md").writeText("not a novel")
 
         val found = DocumentScanner.collectTextFiles(DocumentFile.fromFile(root))
 
         assertEquals(
-            listOf("a.txt", "b.TXT", "c.txt", "d.text"),
+            listOf("a.txt", "b.TXT", "c.txt", "d.epub", "d.text"),
             found.map { it.name }.sorted(),
         )
     }
@@ -105,22 +106,26 @@ class DocumentScannerTest {
     }
 
     @Test
-    fun `isTextFile accepts only txt and text`() {
+    fun `isTextFile accepts txt text and epub`() {
         assertTrue(DocumentScanner.isTextFile("小说.txt"))
         assertTrue(DocumentScanner.isTextFile("NOVEL.TXT"))
         assertTrue(DocumentScanner.isTextFile("a.text"))
-        assertFalse(DocumentScanner.isTextFile("a.epub"))
+        assertTrue(DocumentScanner.isTextFile("夜航船.epub"))
+        assertTrue(DocumentScanner.isTextFile("BOOK.EPUB"))
+        assertFalse(DocumentScanner.isTextFile("a.pdf"))
+        assertFalse(DocumentScanner.isTextFile("a.mobi"))
         assertFalse(DocumentScanner.isTextFile("novel"))
         assertFalse(DocumentScanner.isTextFile("txt"))
     }
 
     @Test
-    fun `batch import brings in every txt under a folder`() = runBlocking {
+    fun `batch import brings in every supported file under a folder`() = runBlocking {
         val root = temp.newFolder("import-all")
         writeNovel(File(root, "夜航船.txt"), chapters = 4)
         writeNovel(File(root, "江防志.txt"), chapters = 3)
         writeNovel(File(root, "sub/旧事.txt"), chapters = 5)
-        File(root, "无关.epub").writeText("ignore me")
+        // 不支持的格式不参与批量导入（epub 现在是被支持的，见上面的收集测试）
+        File(root, "忽略我.md").writeText("ignore me")
 
         val candidates = DocumentScanner.collectTextFiles(DocumentFile.fromFile(root))
         assertEquals(3, candidates.size)

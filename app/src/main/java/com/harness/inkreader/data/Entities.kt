@@ -35,10 +35,25 @@ data class BookEntity(
      * null 表示没有自定义封面，书架会回退到「书名首字 + 稳定渐变色」的生成封面。
      */
     val coverPath: String? = null,
+    /**
+     * 这本书的来源格式：`TXT` / `EPUB`。
+     *
+     * 非 TXT 的书在导入时就被解析成一份**规范化文本**，`filePath` 指向那份文本，
+     * 所以阅读链路（分块、索引、进度、书签）完全不用知道格式差异。
+     */
+    val format: String = BookFormat.TXT,
+    /** 原始文件位置：复制模式下是私有目录里的副本，引用模式下是 content:// URI。 */
+    val sourcePath: String? = null,
     val indexed: Boolean = false,
     val addedAt: Long = 0,
     val lastReadAt: Long = 0,
 )
+
+/** 支持的书籍格式。 */
+object BookFormat {
+    const val TXT = "TXT"
+    const val EPUB = "EPUB"
+}
 
 /**
  * 章节索引。主键是 (bookId, idx)，所以按书查询天然有序且走主键索引。

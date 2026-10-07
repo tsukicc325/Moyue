@@ -81,6 +81,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.harness.inkreader.InkApp
 import com.harness.inkreader.data.BookEntity
+import com.harness.inkreader.data.BookFormat
 import com.harness.inkreader.data.ImportProgress
 import com.harness.inkreader.data.StorageMode
 import java.io.File
@@ -126,6 +127,9 @@ fun BookshelfScreen(
     ) { uri ->
         if (uri != null) viewModel.import(uri)
     }
+    // 选择器里要同时能看到 txt 和 epub；部分文件管理器对 application/epub+zip 归类不同，
+    // 所以再兜一个 */* —— 读不动的东西反正会在导入时报错，比「选不到文件」体验好。
+    val importMimeTypes = arrayOf("text/plain", "application/epub+zip", "*/*")
 
     val folderPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
@@ -268,7 +272,7 @@ fun BookshelfScreen(
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = { filePicker.launch(arrayOf("*/*")) },
+                onClick = { filePicker.launch(importMimeTypes) },
                 icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                 text = { Text("导入") },
             )
@@ -415,7 +419,9 @@ private fun BookRow(
                     text = buildString {
                         append(book.chapterCount).append(" 章 · ")
                         append(formatSize(book.fileSize)).append(" · ")
-                        append(book.encoding)
+                        // EPUB 显示格式而不是编码：它内部正文是解析出来的规范化文本，
+                        // 写「UTF-8」会让人以为导入的是个文本文件
+                        append(if (book.format == BookFormat.EPUB) BookFormat.EPUB else book.encoding)
                         book.groupName?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
                         if (book.storageMode == StorageMode.REFERENCE) append(" · 引用")
                     },
@@ -620,12 +626,14 @@ private fun BookDialogs(
                 val book = dialog.book
                 Column {
                     DetailRow("书名", book.title)
+                    DetailRow("格式", book.format)
                     DetailRow("章节数", "${book.chapterCount}" + if (book.usedVirtualChapters) "（按字数虚拟分章）" else "")
                     DetailRow("存储方式", if (book.storageMode == StorageMode.COPY) "复制到应用内" else "只引用原文件")
                     DetailRow("文件大小", formatSize(book.fileSize))
                     DetailRow("正文编码", book.encoding + if (book.encodingManual) "（手动指定）" else "")
                     DetailRow("判定依据", book.encodingEvidence.ifBlank { "—" })
                     DetailRow("位置", book.filePath)
+                    book.sourcePath?.let { DetailRow("原文件", it) }
                     DetailRow("添加时间", formatTime(book.addedAt))
                     DetailRow("最近阅读", if (book.lastReadAt > 0) formatTime(book.lastReadAt) else "还没读过")
                 }

@@ -8,8 +8,10 @@ import com.harness.inkreader.engine.ByteSource
 import com.harness.inkreader.engine.ChapterIndexer
 import com.harness.inkreader.engine.Charsets
 import com.harness.inkreader.engine.EncodingDetector
+import com.harness.inkreader.engine.EpubParser
 import com.harness.inkreader.engine.FileByteSource
 import com.harness.inkreader.engine.IndexResult
+import com.harness.inkreader.engine.IndexedChapter
 import com.harness.inkreader.engine.UriByteSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -108,14 +110,22 @@ class BookRepository(
         displayName: String? = null,
         mode: String = StorageMode.COPY,
         onProgress: (ImportProgress) -> Unit = {},
-    ): Long = importStream(
-        displayName = displayName ?: source.name,
-        knownLength = source.length(),
-        openStream = { source.inputStream() },
-        mode = mode,
-        referenceUri = null,
-        onProgress = onProgress,
-    )
+    ): Long {
+        val name = displayName ?: source.name
+        // EPUB 走独立路径：先解析成「规范化文本」，之后的阅读链路（分块/索引/进度/书签）
+        // 与 TXT 完全共用。扩展名像 EPUB 但其实是普通 zip 或改了名的 txt 时，自动退回文本流程。
+        if (isEpubName(name) && EpubParser.looksLikeEpub(source)) {
+            return importEpub(source, name, mode, null, onProgress)
+        }
+        return importStream(
+            displayName = name,
+            knownLength = source.length(),
+            openStream = { source.inputStream() },
+            mode = mode,
+            referenceUri = null,
+            onProgress = onProgress,
+        )
+    }
 
     suspend fun importFromUri(
         uri: Uri,
@@ -123,8 +133,40 @@ class BookRepository(
         mode: String = StorageMode.COPY,
         onProgress: (ImportProgress) -> Unit = {},
     ): Long {
-        if (mode == StorageMode.REFERENCE) persistReadPermission(uri)
         val name = displayName ?: displayNameOf(uri) ?: uri.lastPathSegment.orEmpty()
+        val claimsEpub = isEpubName(name) ||
+            runCatching { context.contentResolver.getType(uri) }.getOrNull() == EPUB_MIME
+        if (claimsEpub) {
+            // ZipFile 需要能随机访问的本地文件，所以先落一份到缓存目录看真身
+            val scratch = File(context.cacheDir, "epub-${UUID.randomUUID()}.epub")
+            val copied = runCatching {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    scratch.outputStream().use { input.copyTo(it) }
+                } != null
+            }.getOrDefault(false)
+            if (copied && EpubParser.looksLikeEpub(scratch)) {
+                if (mode == StorageMode.REFERENCE) persistReadPermission(uri)
+                try {
+                    return importEpub(scratch, name, mode, uri.toString(), onProgress)
+                } finally {
+                    scratch.delete()
+                }
+            }
+            val scratchLength = scratch.length()
+            scratch.delete()
+            // 名字/类型像 EPUB 其实不是：按文本导入，不要把用户的书拒之门外
+            return importStream(
+                displayName = name,
+                knownLength = if (scratchLength > 0L) scratchLength else sizeOf(uri),
+                openStream = {
+                    context.contentResolver.openInputStream(uri) ?: error("无法打开 $uri")
+                },
+                mode = mode,
+                referenceUri = if (mode == StorageMode.REFERENCE) uri else null,
+                onProgress = onProgress,
+            )
+        }
+        if (mode == StorageMode.REFERENCE) persistReadPermission(uri)
         return importStream(
             displayName = name,
             knownLength = sizeOf(uri),
@@ -133,6 +175,119 @@ class BookRepository(
             referenceUri = uri,
             onProgress = onProgress,
         )
+    }
+
+    /**
+     * 导入 EPUB。
+     *
+     * 关键设计：EPUB 解析出来的正文会被写成一份**规范化文本**（一章一段连续 UTF-8 字节，
+     * 章节表直接用 EPUB 自己的目录标题），`filePath` 指向这份文本。这样阅读器完全不知道
+     * 格式差异，TXT 的代码路径一行都不用改 —— 「TXT 保持正常可用」是结构上保证的。
+     */
+    private suspend fun importEpub(
+        source: File,
+        displayName: String,
+        mode: String,
+        referenceUri: String?,
+        onProgress: (ImportProgress) -> Unit,
+    ): Long = withContext(Dispatchers.IO) {
+        onProgress(ImportProgress(ImportProgress.Phase.DETECT, 0f, "正在解析 EPUB"))
+
+        // 复制模式留下原文件副本，便于以后重新解析（重建索引、换封面）；
+        // 引用模式不复制，只保存规范化文本与那个 URI。
+        val storedSource = if (mode == StorageMode.REFERENCE) {
+            null
+        } else {
+            val copy = File(booksDir, "${UUID.randomUUID()}.epub")
+            runCatching {
+                source.inputStream().use { input -> copy.outputStream().use { input.copyTo(it) } }
+            }.getOrElse { failure ->
+                runCatching { copy.delete() }
+                throw failure
+            }
+            copy
+        }
+
+        try {
+            onProgress(ImportProgress(ImportProgress.Phase.INDEX, 0.2f, "正在提取正文"))
+            val epub = EpubParser.parse(storedSource ?: source)
+
+            val usable = epub.chapters.filter { it.text.isNotBlank() }
+            if (usable.isEmpty()) {
+                error("这本书里没有提取到文字（可能是纯图片漫画，或文件已损坏）")
+            }
+
+            val normalized = File(booksDir, "${UUID.randomUUID()}.txt")
+            val indexed = ArrayList<IndexedChapter>(usable.size)
+            var offset = 0L
+            try {
+                normalized.outputStream().buffered().use { out ->
+                    usable.forEachIndexed { position, chapter ->
+                        val bytes = (chapter.text.trim() + "\n").toByteArray(StandardCharsets.UTF_8)
+                        indexed.add(
+                            IndexedChapter(
+                                idx = position,
+                                title = chapter.title.ifBlank { "第 ${position + 1} 部分" },
+                                startByte = offset,
+                                endByte = offset + bytes.size,
+                            )
+                        )
+                        out.write(bytes)
+                        offset += bytes.size
+                    }
+                }
+            } catch (failure: Throwable) {
+                runCatching { normalized.delete() }
+                throw failure
+            }
+
+            onProgress(ImportProgress(ImportProgress.Phase.SAVE, 1f, "正在写入书库"))
+            val index = IndexResult(
+                chapters = indexed,
+                totalBytes = offset,
+                charset = StandardCharsets.UTF_8,
+                usedVirtualChapters = false,
+                elapsedMillis = 0L,
+                // EPUB 的章节是解析出来的，不是扫行扫出来的；行数按正文行数记，仅供详情显示
+                linesScanned = indexed.sumOf { chapter ->
+                    usable[chapter.idx].text.count { it == '\n' } + 1L
+                },
+            )
+            val bookId = persist(
+                title = epub.title?.takeIf { it.isNotBlank() } ?: titleFromFileName(displayName),
+                filePath = normalized.absolutePath,
+                // 阅读读的是规范化文本，它永远在私有目录里，所以存储方式按复制记录
+                mode = StorageMode.COPY,
+                fileSize = offset,
+                fileMtime = normalized.lastModified(),
+                charset = StandardCharsets.UTF_8,
+                detectionEvidence = "EPUB 解析" + (epub.author?.let { "，作者 $it" } ?: ""),
+                encodingManual = false,
+                index = index,
+                orphanCopy = normalized,
+                format = BookFormat.EPUB,
+                sourcePath = storedSource?.absolutePath ?: referenceUri,
+            )
+
+            // 书里自带封面就用它（失败不影响导入 —— 书架会回退到生成封面）
+            epub.coverBytes?.let { bytes ->
+                Covers.importCoverBytes(context, bookId, bytes)?.let { path ->
+                    db.books().setCover(bookId, path)
+                }
+            }
+
+            // 命中去重复用了已有记录时，这次多出来的原文件副本要删掉
+            val saved = db.books().byId(bookId)
+            if (storedSource != null && saved?.sourcePath != storedSource.absolutePath) {
+                runCatching { storedSource.delete() }
+            }
+            bookId
+        } catch (failure: Throwable) {
+            storedSource?.let { runCatching { it.delete() } }
+            throw failure
+        } finally {
+            onProgress(ImportProgress(ImportProgress.Phase.DONE, 1f))
+        }
     }
 
     /**
@@ -443,6 +598,8 @@ class BookRepository(
         encodingManual: Boolean,
         index: IndexResult,
         orphanCopy: File?,
+        format: String = BookFormat.TXT,
+        sourcePath: String? = null,
     ): Long {
         // 同一本书（同名且大小相同，或就是同一个来源）重复导入时复用已有记录
         val existing = db.books().all().firstOrNull { book ->
@@ -470,6 +627,8 @@ class BookRepository(
                 chapterCount = index.chapters.size,
                 usedVirtualChapters = index.usedVirtualChapters,
                 coverSeed = title.hashCode(),
+                format = format,
+                sourcePath = sourcePath,
                 indexed = true,
                 addedAt = System.currentTimeMillis(),
                 lastReadAt = 0L,
@@ -565,8 +724,7 @@ class BookRepository(
         }
     }
 
-    private fun displayNameOf(uri: Uri): String? = runCatching {
-        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+    private fun displayNameOf(uri: Uri): String? = runCatching {        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
             val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
             if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
         }
@@ -596,6 +754,9 @@ class BookRepository(
         return withoutExtension.ifEmpty { "未命名" }
     }
 
+    private fun isEpubName(name: String): Boolean =
+        name.substringAfterLast('.', "").equals("epub", ignoreCase = true)
+
     private fun com.harness.inkreader.engine.IndexedChapter.toEntity(bookId: Long) = ChapterEntity(
         bookId = bookId,
         idx = idx,
@@ -606,6 +767,10 @@ class BookRepository(
 
     companion object {
         const val BOOKS_DIR = "books"
+
+        /** EPUB 的 MIME 类型（文件选择器与 content:// 的 type 都用它）。 */
+        const val EPUB_MIME = "application/epub+zip"
+
         /** 划线高亮色（半透明琥珀），直接画在正文底层。 */
         const val DEFAULT_HIGHLIGHT_COLOR = 0x66FFC107
         private const val COPY_BUFFER = 1 shl 20

@@ -23,9 +23,10 @@ keystore.properties
 # ---- 手机验证证据（含真机截图：状态栏、运营商、正在读的正文，绝不发布）----
 device-evidence/
 
-# ---- 生成的测试小说（体积大、可随时用 tools/make_test_novels.py 重新生成）----
+# ---- 生成的测试小说/测试书（体积大、可随时用 tools/ 下的脚本重新生成）----
 testdata/*.txt
 testdata/*.bin
+testdata/*.epub
 
 # ---- 其它 ----
 *.log

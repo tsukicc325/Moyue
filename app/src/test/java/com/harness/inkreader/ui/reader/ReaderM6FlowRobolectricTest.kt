@@ -184,13 +184,64 @@ class ReaderM6FlowRobolectricTest {
         }
 
         val track = viewModel.state.value.scrollChunks
-        assertTrue("轨道窗口必须有上限，实际 ${track.size}", track.size <= 3)
+        // 窗口上限现在是「块数硬上限 + 内容够两屏」，不再是固定 3 块
+        assertTrue("轨道块数不得超过硬上限，实际 ${track.size}", track.size <= 12)
+        assertTrue(
+            "轨道内容应当留够两屏（视口 1200px），实际 ${track.sumOf { it.heightPx }}px",
+            track.sumOf { it.heightPx } >= 2400,
+        )
         assertTrue("轨道应当已经往前推进", track.first().chapterIdx > 0)
 
         // 滚到第二块 → 顶部条/进度/书签用的坐标要跟着切过去
         viewModel.onScrollPosition(1, 0)
         assertEquals(track[1].chapterIdx, viewModel.state.value.chapterIdx)
         assertEquals(track[1].blockIndex, viewModel.state.value.blockIndex)
+    }
+
+    /**
+     * 回归：极短的章节不能把阅读器锁死。
+     *
+     * 曾经的问题：轨道按**块数**限 3 块，而收缩时为了保护「正在读的块」会从尾部丢 ——
+     * 短章节时新预取的块刚进来就被丢掉，3 块加起来又填不满一屏，于是
+     * 「滚不动 → 活跃块不动 → 新内容被丢」形成死锁（真机表现：卡在第一章划不了）。
+     */
+    @Test
+    fun `very short chapters do not lock the reader in scroll mode`() {
+        val bookId = runBlocking { importShortChapters() }
+        val viewModel = open(bookId, settings = ReaderSettings(readingMode = ReadingMode.SCROLL.name))
+
+        // 模拟界面在「内容不足一屏」时的行为：反复预取
+        var lastTotal = -1
+        var stable = 0
+        var rounds = 0
+        while (rounds++ < 40 && stable < 5) {
+            viewModel.appendScrollChunk()
+            idleMain()
+            Thread.sleep(30)
+            val total = viewModel.state.value.scrollChunks.sumOf { it.heightPx }
+            if (total == lastTotal) stable++ else stable = 0
+            lastTotal = total
+        }
+
+        val track = viewModel.state.value.scrollChunks
+        assertTrue(
+            "预取后内容总高 ${lastTotal}px 仍不足一屏（视口 1200px）→ 界面永远滚不动；" +
+                "轨道=${track.size} 块，章节=${track.map { it.chapterIdx }}",
+            lastTotal > 1200,
+        )
+        assertTrue("硬上限依然生效", track.size <= 12)
+    }
+
+    private fun importShortChapters(chapters: Int = 6): Long = runBlocking {
+        val text = buildString {
+            for (chapter in 1..chapters) {
+                append("第").append(chapter).append("章 短\n")
+                append("这一章只有一句话。\n")
+            }
+        }
+        val source = File(temp.newFolder(), "短章.txt")
+        source.writeBytes(text.toByteArray(gbk))
+        repo.importFromFile(source)
     }
 
     @Test
